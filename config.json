@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "description": "Гексагональная сотовая сеть с концентрическими tier'ами",
+    "created": "2026-02-13"
+  },
+  "network_parameters": {
+    "ISD_m": 100.0,
+    "tiers": 10
+  },
+  "tier_structure": {
+    "description": "Tier 0: 1 БС (центр). Tier k≥1: 6*k БС в кольце.",
+    "formula_total_bs": "1 + 3 * N * (N + 1)"
+  }
+}
