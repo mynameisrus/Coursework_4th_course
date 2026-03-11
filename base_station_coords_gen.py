@@ -20,16 +20,41 @@ class HexagonalNetwork:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
+    def hex_to_cartesian(self, x: int, y: int, z: int) -> Tuple[float, float]:
+        X = (x + y / 2) * self.ISD
+        Y = (y * math.sqrt(3) / 2) * self.ISD
+        return (X, Y)
+
     def generate_bs_coordinates(self) -> List[Tuple[float, float, int]]:
         coords = [(0.0, 0.0, 0)]
+
+        directions = [
+            (1, -1, 0),
+            (1, 0, -1),
+            (0, 1, -1),
+            (-1, 1, 0),
+            (-1, 0, 1),
+            (0, -1, 1),
+        ]
+
         for k in range(1, self.tiers + 1):
-            for i in range(-k, k + 1):
-                for j in range(-k, k + 1):
-                    if abs(i) + abs(j) + abs(i + j) <= 2 * k and not (i == 0 and j == 0):
-                        x = (i + j / 2) * self.ISD
-                        y = (j * math.sqrt(3) / 2) * self.ISD
-                        tier = max(abs(i), abs(j), abs(i + j))
-                        coords.append((x, y, tier))
+            for side in range(6):
+                x = k * directions[side][0]
+                y = k * directions[side][1]
+                z = k * directions[side][2]
+
+                dir_x = directions[(side + 2) % 6][0]
+                dir_y = directions[(side + 2) % 6][1]
+                dir_z = directions[(side + 2) % 6][2]
+
+                for step in range(k):
+                    X, Y = self.hex_to_cartesian(x, y, z)
+                    coords.append((X, Y, k))
+
+                    x += dir_x
+                    y += dir_y
+                    z += dir_z
+
         return coords
 
     def generate_user_coordinates(self) -> List[Tuple[float, float, int]]:
@@ -102,13 +127,15 @@ class HexagonalNetwork:
         ax.grid(True, linestyle='--', alpha=0.5)
         ax.set_xlabel('X (м)', fontsize=12)
         ax.set_ylabel('Y (м)', fontsize=12)
-        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м, Tiers={self.tiers}, Всего БС={len(coords)}',fontsize=14, fontweight='bold')
+        ax.set_title(f'Гексагональная сеть (*R3): ISD={self.ISD} м, Tiers={self.tiers}, Всего БС={len(coords)}',fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
+
 
 def main():
     network = HexagonalNetwork("config.json")
     network.visualize()
+
 
 if __name__ == "__main__":
     main()
