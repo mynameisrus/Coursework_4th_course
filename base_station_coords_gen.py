@@ -8,11 +8,18 @@ import random
 
 
 class HexagonalNetwork:
+    HEX_DIRECTIONS = [
+        (1, 0, -1), (0, 1, -1), (-1, 1, 0),
+        (-1, 0, 1), (0, -1, 1), (1, -1, 0),
+    ]
+
     def __init__(self, config_path: str):
         self.config_path = Path(config_path)
         self.config = self.load_config()
+
         self.ISD = self.config["network_parameters"]["ISD_m"]
-        self.tiers = self.config["network_parameters"]["tiers"]
+        self.tiers = self.config["network_parameters"].get("tiers", 2)
+        self.mode = self.config["network_parameters"].get("mode", "tiers")
         self.total_users = self.config["network_parameters"].get("total_users", 0)
         self.cell_radius = self.ISD / math.sqrt(3)
 
@@ -25,48 +32,64 @@ class HexagonalNetwork:
         Y = (y * math.sqrt(3) / 2) * self.ISD
         return (X, Y)
 
-    def generate_bs_coordinates(self) -> List[Tuple[float, float, int]]:
+    def _generate_hex_grid(self) -> List[Tuple[float, float, int]]:
+
         coords = [(0.0, 0.0, 0)]
 
-        directions = [
-            (1, -1, 0),
-            (1, 0, -1),
-            (0, 1, -1),
-            (-1, 1, 0),
-            (-1, 0, 1),
-            (0, -1, 1),
-        ]
-
-        for k in range(1, self.tiers + 1):
+        for tier in range(1, self.tiers + 1):
             for side in range(6):
-                x = k * directions[side][0]
-                y = k * directions[side][1]
-                z = k * directions[side][2]
+                for step in range(tier):
+                    x = (tier - step) * self.HEX_DIRECTIONS[side][0] + step * self.HEX_DIRECTIONS[(side + 1) % 6][0]
+                    y = (tier - step) * self.HEX_DIRECTIONS[side][1] + step * self.HEX_DIRECTIONS[(side + 1) % 6][1]
+                    z = (tier - step) * self.HEX_DIRECTIONS[side][2] + step * self.HEX_DIRECTIONS[(side + 1) % 6][2]
 
-                dir_x = directions[(side + 2) % 6][0]
-                dir_y = directions[(side + 2) % 6][1]
-                dir_z = directions[(side + 2) % 6][2]
-
-                for step in range(k):
                     X, Y = self.hex_to_cartesian(x, y, z)
-                    coords.append((X, Y, k))
-
-                    x += dir_x
-                    y += dir_y
-                    z += dir_z
+                    coords.append((X, Y, tier))
 
         return coords
+
+    def generate_bs_coordinates(self) -> List[Tuple[float, float, int]]:
+        if self.mode == 1:
+            return self.generate_tri_hex_centers()
+        else:
+            return self._generate_hex_grid()
+
+    def generate_tri_hex_centers(self) -> List[Tuple[float, float, int]]:
+        bs_coords = self._generate_hex_grid()
+        hex_centers = []
+        seen_centers = set()
+
+        hex_angles = [math.pi / 2, 7 * math.pi / 6, 11 * math.pi / 6]
+
+        for bs_x, bs_y, tier in bs_coords:
+            for angle in hex_angles:
+                center_x = bs_x + self.cell_radius * math.cos(angle)
+                center_y = bs_y + self.cell_radius * math.sin(angle)
+
+                key = (round(center_x, 6), round(center_y, 6))
+                if key not in seen_centers:
+                    seen_centers.add(key)
+                    hex_centers.append((center_x, center_y, tier))
+
+        return hex_centers
+
+    def get_bs_positions(self) -> List[Tuple[float, float, int]]:
+        return self._generate_hex_grid()
 
     def generate_user_coordinates(self) -> List[Tuple[float, float, int]]:
         if self.total_users <= 0:
             return []
 
-        bs_coords = self.generate_bs_coordinates()
+        hex_coords = self.generate_bs_coordinates()
+
+        if len(hex_coords) == 0:
+            return []
+
         user_coords = []
 
         for user_id in range(self.total_users):
-            bs_index = random.randint(0, len(bs_coords) - 1)
-            bs_x, bs_y, _ = bs_coords[bs_index]
+            hex_index = random.randint(0, len(hex_coords) - 1)
+            hex_x, hex_y, _ = hex_coords[hex_index]
             sector = random.randint(0, 5)
 
             r1 = random.random()
@@ -77,7 +100,6 @@ class HexagonalNetwork:
                 r2 = 1 - r2
 
             angle_offset = math.pi / 6
-
             angle_base = sector * math.pi / 3 + angle_offset
             angle_next = (sector + 1) * math.pi / 3 + angle_offset
 
@@ -88,16 +110,18 @@ class HexagonalNetwork:
             user_rel_x = r1 * x2 + r2 * x3 + (1 - r1 - r2) * x1
             user_rel_y = r1 * y2 + r2 * y3 + (1 - r1 - r2) * y1
 
-            user_x = bs_x + user_rel_x
-            user_y = bs_y + user_rel_y
+            user_x = hex_x + user_rel_x
+            user_y = hex_y + user_rel_y
 
-            user_coords.append((user_x, user_y, bs_index))
+            user_coords.append((user_x, user_y, hex_index))
 
         return user_coords
 
     def visualize(self):
-        coords = self.generate_bs_coordinates()
+        hex_coords = self.generate_bs_coordinates()
+        bs_coords = self.get_bs_positions()
         user_coords = self.generate_user_coordinates()
+
         fig, ax = plt.subplots(figsize=(10, 10))
         ax.set_aspect('equal')
 
@@ -106,7 +130,7 @@ class HexagonalNetwork:
             user_y = [y for x, y, _ in user_coords]
             ax.scatter(user_x, user_y, c='red', s=30, alpha=0.7, marker='o', zorder=5)
 
-        for x, y, tier in coords:
+        for x, y, tier in hex_coords:
             hexagon = RegularPolygon(
                 (x, y),
                 numVertices=6,
@@ -118,7 +142,7 @@ class HexagonalNetwork:
             )
             ax.add_patch(hexagon)
 
-        for x, y, tier in coords:
+        for x, y, tier in bs_coords:
             ax.plot(x, y, 'ko', markersize=8, zorder=10)
 
         max_range = (self.tiers + 1) * self.ISD * 1.1
@@ -127,7 +151,10 @@ class HexagonalNetwork:
         ax.grid(True, linestyle='--', alpha=0.5)
         ax.set_xlabel('X (м)', fontsize=12)
         ax.set_ylabel('Y (м)', fontsize=12)
-        ax.set_title(f'Гексагональная сеть (*R3): ISD={self.ISD} м, Tiers={self.tiers}, Всего БС={len(coords)}',fontsize=14, fontweight='bold')
+
+        num_bs = len(bs_coords)
+        num_hex = len(hex_coords)
+        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м',fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
 

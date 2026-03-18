@@ -4,8 +4,10 @@
     "created": "2026-02-13"
   },
   "network_parameters": {
-    "ISD_m": 100.0,
-    "tiers": 10
+    "ISD_m": 500.0,
+    "tiers": 1,
+    "mode": 1,
+    "total_users": 1000
   },
   "tier_structure": {
     "description": "Tier 0: 1 БС (центр). Tier k≥1: 6*k БС в кольце.",
