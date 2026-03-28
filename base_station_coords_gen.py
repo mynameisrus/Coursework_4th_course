@@ -20,8 +20,12 @@ class HexagonalNetwork:
         self.ISD = self.config["network_parameters"]["ISD_m"]
         self.tiers = self.config["network_parameters"].get("tiers", 2)
         self.mode = self.config["network_parameters"].get("mode", "tiers")
+        self.site_radius = self.ISD / math.sqrt(3)
         self.total_users = self.config["network_parameters"].get("total_users", 0)
-        self.cell_radius = self.ISD / math.sqrt(3)
+        if self.mode == 1:
+            self.cell_radius = self.site_radius / math.sqrt(3)
+        else:
+            self.cell_radius = self.site_radius
 
     def load_config(self) -> dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -30,10 +34,18 @@ class HexagonalNetwork:
     def hex_to_cartesian(self, x: int, y: int, z: int) -> Tuple[float, float]:
         X = (x + y / 2) * self.ISD
         Y = (y * math.sqrt(3) / 2) * self.ISD
+
+        if self.mode == 1:
+            angle = math.pi / 6
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
+            X_rot = X * cos_a - Y * sin_a
+            Y_rot = X * sin_a + Y * cos_a
+            return (X_rot, Y_rot)
+
         return (X, Y)
 
     def _generate_hex_grid(self) -> List[Tuple[float, float, int]]:
-
         coords = [(0.0, 0.0, 0)]
 
         for tier in range(1, self.tiers + 1):
@@ -59,17 +71,14 @@ class HexagonalNetwork:
         hex_centers = []
         seen_centers = set()
 
-        hex_angles = [math.pi / 2, 7 * math.pi / 6, 11 * math.pi / 6]
+        hex_angles = [math.pi / 6, 5 * math.pi / 6, 3 * math.pi / 2]
 
         for bs_x, bs_y, tier in bs_coords:
             for angle in hex_angles:
                 center_x = bs_x + self.cell_radius * math.cos(angle)
                 center_y = bs_y + self.cell_radius * math.sin(angle)
 
-                key = (round(center_x, 6), round(center_y, 6))
-                if key not in seen_centers:
-                    seen_centers.add(key)
-                    hex_centers.append((center_x, center_y, tier))
+                hex_centers.append((center_x, center_y, tier))
 
         return hex_centers
 
@@ -122,7 +131,7 @@ class HexagonalNetwork:
         bs_coords = self.get_bs_positions()
         user_coords = self.generate_user_coordinates()
 
-        fig, ax = plt.subplots(figsize=(10, 10))
+        fig, ax = plt.subplots(figsize=(7, 7))
         ax.set_aspect('equal')
 
         if user_coords:
