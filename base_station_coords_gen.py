@@ -1,5 +1,6 @@
 import json
 import math
+import csv
 from pathlib import Path
 from typing import List, Tuple
 import matplotlib.pyplot as plt
@@ -18,10 +19,15 @@ class HexagonalNetwork:
         self.config = self.load_config()
 
         self.ISD = self.config["network_parameters"]["ISD_m"]
-        self.tiers = self.config["network_parameters"].get("tiers", 2)
-        self.mode = self.config["network_parameters"].get("mode", "tiers")
+        self.tiers = self.config["network_parameters"].get("tiers", 1)
+        self.mode = self.config["network_parameters"].get("mode", 1)
         self.site_radius = self.ISD / math.sqrt(3)
         self.total_users = self.config["network_parameters"].get("total_users", 0)
+        self.bs_height_min = self.config["network_parameters"].get("bs_height_min", 30)
+        self.bs_height_max = self.config["network_parameters"].get("bs_height_max", 50)
+        self.user_height_min = self.config["network_parameters"].get("user_height_min", 0)
+        self.user_height_max = self.config["network_parameters"].get("user_height_max", 30)
+
         if self.mode == 1:
             self.cell_radius = self.site_radius / math.sqrt(3)
         else:
@@ -45,8 +51,8 @@ class HexagonalNetwork:
 
         return (X, Y)
 
-    def _generate_hex_grid(self) -> List[Tuple[float, float, int]]:
-        coords = [(0.0, 0.0, 0)]
+    def generate_hex_grid(self) -> List[Tuple[float, float, float, int]]:
+        coords = [(0.0, 0.0, random.uniform(self.bs_height_min, self.bs_height_max), 0)]
 
         for tier in range(1, self.tiers + 1):
             for side in range(6):
@@ -56,54 +62,49 @@ class HexagonalNetwork:
                     z = (tier - step) * self.HEX_DIRECTIONS[side][2] + step * self.HEX_DIRECTIONS[(side + 1) % 6][2]
 
                     X, Y = self.hex_to_cartesian(x, y, z)
-                    coords.append((X, Y, tier))
+                    Z = random.uniform(self.bs_height_min, self.bs_height_max)
+                    coords.append((X, Y, Z, tier))
 
         return coords
 
-    def generate_bs_coordinates(self) -> List[Tuple[float, float, int]]:
+    def generate_bs_coordinates(self) -> List[Tuple[float, float, float, int]]:
         if self.mode == 1:
             return self.generate_tri_hex_centers()
         else:
-            return self._generate_hex_grid()
+            return self.generate_hex_grid()
 
-    def generate_tri_hex_centers(self) -> List[Tuple[float, float, int]]:
-        bs_coords = self._generate_hex_grid()
+    def generate_tri_hex_centers(self) -> List[Tuple[float, float, float, int]]:
+        bs_coords = self.generate_hex_grid()
         hex_centers = []
-        seen_centers = set()
-
         hex_angles = [math.pi / 6, 5 * math.pi / 6, 3 * math.pi / 2]
 
-        for bs_x, bs_y, tier in bs_coords:
+        for bs_x, bs_y, bs_z, tier in bs_coords:
             for angle in hex_angles:
                 center_x = bs_x + self.cell_radius * math.cos(angle)
                 center_y = bs_y + self.cell_radius * math.sin(angle)
-
-                hex_centers.append((center_x, center_y, tier))
+                hex_centers.append((center_x, center_y, bs_z, tier))
 
         return hex_centers
 
-    def get_bs_positions(self) -> List[Tuple[float, float, int]]:
-        return self._generate_hex_grid()
+    def get_bs_positions(self) -> List[Tuple[float, float, float, int]]:
+        return self.generate_hex_grid()
 
-    def generate_user_coordinates(self) -> List[Tuple[float, float, int]]:
+    def generate_user_coordinates(self) -> List[Tuple[float, float, float]]:
         if self.total_users <= 0:
             return []
 
         hex_coords = self.generate_bs_coordinates()
-
         if len(hex_coords) == 0:
             return []
 
         user_coords = []
-
         for user_id in range(self.total_users):
             hex_index = random.randint(0, len(hex_coords) - 1)
-            hex_x, hex_y, _ = hex_coords[hex_index]
+            hex_x, hex_y, hex_z, _ = hex_coords[hex_index]
             sector = random.randint(0, 5)
 
             r1 = random.random()
             r2 = random.random()
-
             if r1 + r2 > 1:
                 r1 = 1 - r1
                 r2 = 1 - r2
@@ -121,25 +122,53 @@ class HexagonalNetwork:
 
             user_x = hex_x + user_rel_x
             user_y = hex_y + user_rel_y
+            user_z = random.uniform(self.user_height_min, self.user_height_max)
 
-            user_coords.append((user_x, user_y, hex_index))
+            user_coords.append((user_x, user_y, user_z))
 
         return user_coords
 
-    def visualize(self):
+    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float,x_bs: float, y_bs: float, z_bs: float) -> float:
+        return math.sqrt((x_bs - x_user) ** 2 + (y_bs - y_user) ** 2 + (z_bs - z_user) ** 2)
+
+    def save_distances_to_csv(self, filename: str = "user_bs_distances.csv",
+                               user_coords: List = None):
+        if user_coords is None:
+            user_coords = self.generate_user_coordinates()
+        bs_coords = self.get_bs_positions()
+
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['bs_coordinates', 'user_coordinates', 'distance_m'])
+
+            for user_x, user_y, user_z in user_coords:
+                for bs_x, bs_y, bs_z, _ in bs_coords:
+                    distance = self.get_bs_user_length(user_x, user_y, user_z, bs_x, bs_y, bs_z)
+
+                    bs_coord_str = f"({bs_x:.2f}, {bs_y:.2f}, {bs_z:.2f})"
+                    user_coord_str = f"({user_x:.2f}, {user_y:.2f}, {user_z:.2f})"
+                    writer.writerow([bs_coord_str, user_coord_str, f"{distance:.2f}"])
+
+        print(f"Сохранено {len(user_coords) * len(bs_coords)} записей в {filename}")
+        print(f"Пользователей: {len(user_coords)}")
+        print(f"БС: {len(bs_coords)}")
+
+    def visualize(self, user_coords: List = None):
         hex_coords = self.generate_bs_coordinates()
         bs_coords = self.get_bs_positions()
-        user_coords = self.generate_user_coordinates()
+
+        if user_coords is None:
+            user_coords = self.generate_user_coordinates()
 
         fig, ax = plt.subplots(figsize=(7, 7))
         ax.set_aspect('equal')
 
         if user_coords:
-            user_x = [x for x, y, _ in user_coords]
-            user_y = [y for x, y, _ in user_coords]
+            user_x = [x for x, y, z in user_coords]
+            user_y = [y for x, y, z in user_coords]
             ax.scatter(user_x, user_y, c='red', s=30, alpha=0.7, marker='o', zorder=5)
 
-        for x, y, tier in hex_coords:
+        for x, y, z, tier in hex_coords:
             hexagon = RegularPolygon(
                 (x, y),
                 numVertices=6,
@@ -151,7 +180,7 @@ class HexagonalNetwork:
             )
             ax.add_patch(hexagon)
 
-        for x, y, tier in bs_coords:
+        for x, y, z, tier in bs_coords:
             ax.plot(x, y, 'ko', markersize=8, zorder=10)
 
         max_range = (self.tiers + 1) * self.ISD * 1.1
@@ -161,16 +190,16 @@ class HexagonalNetwork:
         ax.set_xlabel('X (м)', fontsize=12)
         ax.set_ylabel('Y (м)', fontsize=12)
 
-        num_bs = len(bs_coords)
-        num_hex = len(hex_coords)
-        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м',fontsize=14, fontweight='bold')
+        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м', fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
 
 
 def main():
     network = HexagonalNetwork("config.json")
-    network.visualize()
+    user_coords = network.generate_user_coordinates()
+    network.save_distances_to_csv("user_bs_distances.csv", user_coords=user_coords)
+    network.visualize(user_coords=user_coords)
 
 
 if __name__ == "__main__":
