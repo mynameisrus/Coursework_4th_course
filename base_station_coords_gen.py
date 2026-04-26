@@ -86,30 +86,25 @@ class HexagonalNetwork:
     def get_bs_positions(self) -> List[Tuple[float, float, float, int]]:
         return self.generate_bs_coordinates()
 
-    def generate_wrapped_bs_positions(self) -> List[Tuple[float, float, float, int, int]]:
+    def generate_wrapped_bs_positions(self) -> List[Tuple[float, float, float, int, int, int]]:
         central_bs = self.get_bs_positions()
         all_bs = []
 
-        for x, y, z, tier in central_bs:
-            all_bs.append((x, y, z, tier, 0))
+        for idx, (x, y, z, tier) in enumerate(central_bs):
+            all_bs.append((x, y, z, tier, 0, idx))
 
         wrap_directions = self.HEX_DIRECTIONS
         shift_distance = (2 * self.tiers + 1) * self.ISD
-
-        copy_offsets = [
-            (-self.ISD / 2, self.ISD * math.sqrt(3) / 2),
-            (-self.ISD, 0),
-            (-self.ISD / 2, -self.ISD * math.sqrt(3) / 2),
-            (self.ISD / 2, -self.ISD * math.sqrt(3) / 2),
-            (self.ISD, 0),
-            (self.ISD / 2, self.ISD * math.sqrt(3) / 2)
-        ]
 
         for wrap_id, (dx, dy, dz) in enumerate(wrap_directions, start=1):
             shift_x = (dx + dy / 2) * shift_distance
             shift_y = (dy * math.sqrt(3) / 2) * shift_distance
 
-            offset_x, offset_y = copy_offsets[wrap_id - 1]
+            idx = (wrap_id + 1) % 6
+            odx, ody, _ = self.HEX_DIRECTIONS[idx]
+            offset_x = (odx + ody / 2) * self.ISD
+            offset_y = (ody * math.sqrt(3) / 2) * self.ISD
+
             shift_x += offset_x * self.tiers
             shift_y += offset_y * self.tiers
 
@@ -121,8 +116,8 @@ class HexagonalNetwork:
             else:
                 final_x, final_y = shift_x, shift_y
 
-            for x, y, z, tier in central_bs:
-                all_bs.append((x + final_x, y + final_y, z, tier, wrap_id))
+            for orig_idx, (x, y, z, tier) in enumerate(central_bs):
+                all_bs.append((x + final_x, y + final_y, z, tier, wrap_id, orig_idx))
 
         return all_bs
 
@@ -165,34 +160,36 @@ class HexagonalNetwork:
 
         return user_coords
 
-    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float, z_bs: float) -> float:
+    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float,z_bs: float) -> float:
         return math.sqrt((x_bs - x_user) ** 2 + (y_bs - y_user) ** 2 + (z_bs - z_user) ** 2)
 
-    def save_distances_to_csv(self, filename: str = "user_bs_distances.csv",user_coords: List = None,use_wrap_around: bool = False):
+    def save_distances_to_csv(self, filename: str = "user_bs_distances.txt",user_coords: List = None):
         if user_coords is None:
             user_coords = self.generate_user_coordinates()
 
-        if use_wrap_around:
-            bs_coords = self.generate_wrapped_bs_positions()
-        else:
-            bs_coords = self.get_bs_positions()
+        bs_coords = self.generate_wrapped_bs_positions()
+        central_bs = self.get_bs_positions()
+        num_orig_bs = len(central_bs)
 
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['bs_coordinates', 'user_coordinates', 'distance_m'])
+        with open(filename, 'w', encoding='utf-8') as f:
+            for uid, (ux, uy, uz) in enumerate(user_coords):
+                best_matches = {i: {'dist': float('inf'), 'coords': (0.0, 0.0, 0.0), 'wrap_id': -1}
+                                for i in range(num_orig_bs)}
+                for bs in bs_coords:
+                    bx, by, bz, _, wrap_id, orig_id = bs
+                    if dist := self.get_bs_user_length(ux, uy, uz, bx, by, bz):
+                        if dist < best_matches[orig_id]['dist']:
+                            best_matches[orig_id]['dist'] = dist
+                            best_matches[orig_id]['coords'] = (bx, by, bz)
+                            best_matches[orig_id]['wrap_id'] = wrap_id
+                f.write(f"For user with coords ({ux:.2f}, {uy:.2f}, {uz:.2f}) distance to:\n")
+                for i in range(num_orig_bs):
+                    x, y, z = best_matches[i]['coords']
+                    d = best_matches[i]['dist']
+                    w_id = best_matches[i]['wrap_id']
+                    f.write(f"bs{i} with coords ({x:.2f}, {y:.2f}, {z:.2f}) from {w_id} cluster, distance = {d:.2f}\n")
+                f.write("\n")
 
-            for user_x, user_y, user_z in user_coords:
-                min_dist = float('inf')
-                nearest_bs = (0.0, 0.0, 0.0)
-                for bs_x, bs_y, bs_z, _, _ in bs_coords:
-                    dist = self.get_bs_user_length(user_x, user_y, user_z, bs_x, bs_y, bs_z)
-                    if dist < min_dist:
-                        min_dist = dist
-                        nearest_bs = (bs_x, bs_y, bs_z)
-
-                bs_coord_str = f"({nearest_bs[0]:.2f}, {nearest_bs[1]:.2f}, {nearest_bs[2]:.2f})"
-                user_coord_str = f"({user_x:.2f}, {user_y:.2f}, {user_z:.2f})"
-                writer.writerow([bs_coord_str, user_coord_str, f"{min_dist:.2f}"])
         print(f"Сохранено {len(user_coords) * len(bs_coords)} записей в {filename}")
         print(f"Пользователей: {len(user_coords)}")
         print(f"БС (с копиями): {len(bs_coords)}")
@@ -206,11 +203,9 @@ class HexagonalNetwork:
         ax.set_aspect('equal')
 
         if user_coords:
-            user_x = [x for x, y, z in user_coords]
-            user_y = [y for x, y, z in user_coords]
-            ax.scatter(user_x, user_y, c='red', s=30, alpha=0.7, marker='o', zorder=5)
+            ax.scatter([u[0] for u in user_coords], [u[1] for u in user_coords],c='red', s=30, alpha=0.7, marker='o', zorder=5)
 
-        for x, y, z, tier, wrap_id in bs_coords:
+        for x, y, z, tier, wrap_id, orig_id in bs_coords:
             hexagon = RegularPolygon(
                 (x, y),
                 numVertices=6,
@@ -223,20 +218,23 @@ class HexagonalNetwork:
             )
             ax.add_patch(hexagon)
 
-        text_offset = self.ISD * 0.1
-        for x, y, z, tier, wrap_id in bs_coords:
+        for x, y, z, tier, wrap_id, orig_id in bs_coords:
             if wrap_id == 0:
-                ax.plot(x, y, 'ko', markersize = 8)
-                ax.text(x, y + text_offset, f'({x:.0f}, {y:.0f})',fontsize = 8, color='black')
+                ax.plot(x, y, 'ko', markersize=8)
+                text_color = 'black'
             else:
-                ax.plot(x, y, 'go', markersize = 6  , alpha=0.5)
-                ax.text(x, y + text_offset, f'({x:.0f}, {y:.0f})',fontsize = 6, color='green', alpha=0.7)
+                ax.plot(x, y, 'go', markersize=6, alpha=0.5)
+                text_color = 'green'
+
+            label = f"Cl {wrap_id}\nBS {orig_id}"
+            ax.text(x, y + self.ISD * 0.15, label, fontsize=8, ha='center', va='bottom',color=text_color)
+
 
         ax.grid(True, linestyle='--', alpha=0.5)
-        ax.set_xlabel('X (м)', fontsize =  12)
-        ax.set_ylabel('Y (м)', fontsize =  12)
+        ax.set_xlabel('X (м)', fontsize=12)
+        ax.set_ylabel('Y (м)', fontsize=12)
 
-        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м', fontsize = 14, fontweight='bold')
+        ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м', fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
 
@@ -244,9 +242,7 @@ class HexagonalNetwork:
 def main():
     network = HexagonalNetwork("config.json")
     user_coords = network.generate_user_coordinates()
-
-    network.save_distances_to_csv("user_bs_distances.csv", user_coords=user_coords, use_wrap_around=True)
-
+    network.save_distances_to_csv("user_bs_distances.csv", user_coords=user_coords)
     network.visualize(user_coords=user_coords)
 
 if __name__ == "__main__":

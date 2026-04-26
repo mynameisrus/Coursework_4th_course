@@ -5,9 +5,9 @@
   },
   "network_parameters": {
       "ISD_m": 500,
-      "tiers": 1,
-      "mode": 1,
-      "total_users": 100,
+      "tiers": 2,
+      "mode": 0,
+      "total_users": 2,
       "bs_height": 30
   }
 }
