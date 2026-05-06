@@ -8,6 +8,35 @@ from matplotlib.patches import RegularPolygon
 import random
 
 
+def hex_round(x: float, y: float, z: float):
+    l = round(x)
+    m = round(y)
+    n = round(z)
+
+    s = l + m + n
+
+    if s == 0:
+        return l, m, n
+
+    if s > 0:
+        xr = x - l
+        yr = y - m
+        zr = z - n
+    else:
+        xr = l - x
+        yr = m - y
+        zr = n - z
+
+    if xr <= yr and xr <= zr:
+        l = - (m + n)
+    elif yr <= xr and yr <= zr:
+        m = - (l + n)
+    else:
+        n = - (l + m)
+
+    return l, m, n
+
+
 class HexagonalNetwork:
     HEX_DIRECTIONS = [
         (1, 0, -1), (0, 1, -1), (-1, 1, 0),
@@ -31,25 +60,28 @@ class HexagonalNetwork:
         else:
             self.cell_radius = self.site_radius
 
+        self._hex_centers_for_vis = []
+        self._all_hex_centers_wrapped = []
+
     def load_config(self) -> dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    def hex_to_cartesian(self, x: int, y: int, z: int) -> Tuple[float, float]:
-        X = (x + y / 2) * self.ISD
-        Y = (y * math.sqrt(3) / 2) * self.ISD
-
-        if self.mode == 1:
-            cos_a = math.cos(math.pi / 6)
-            sin_a = math.sin(math.pi / 6)
-            X_rot = X * cos_a - Y * sin_a
-            Y_rot = X * sin_a + Y * cos_a
-            return (X_rot, Y_rot)
-
+    def hex_to_cartesian(self, x: float, y: float, z: float) -> Tuple[float, float]:
+        step = self.site_radius if self.mode == 1 else self.ISD
+        X = (x + y / 2.0) * step
+        Y = -(x + z) * (math.sqrt(3) / 2) * step
         return (X, Y)
 
-    def generate_hex_grid(self) -> List[Tuple[float, float, float, int]]:
-        coords = [(0.0, 0.0, self.bs_height, 0)]
+    def add_hex_point(self, hex_coords: list, cartesian_coords: list, x: int, y: int, z: int, tier: int):
+        hex_coords.append((x, y, z, tier))
+        X, Y = self.hex_to_cartesian(x, y, z)
+        Z = self.bs_height
+        cartesian_coords.append((X, Y, Z, tier))
+
+    def generate_hex_grid(self):
+        hex_coords = [(0, 0, 0, 0)]
+        cartesian_coords = [(0.0, 0.0, self.bs_height, 0)]
 
         for tier in range(1, self.tiers + 1):
             for side in range(6):
@@ -58,30 +90,53 @@ class HexagonalNetwork:
                     y = (tier - step) * self.HEX_DIRECTIONS[side][1] + step * self.HEX_DIRECTIONS[(side + 1) % 6][1]
                     z = (tier - step) * self.HEX_DIRECTIONS[side][2] + step * self.HEX_DIRECTIONS[(side + 1) % 6][2]
 
-                    X, Y = self.hex_to_cartesian(x, y, z)
-                    Z = self.bs_height
-                    coords.append((X, Y, Z, tier))
+                    self.add_hex_point(hex_coords, cartesian_coords, x, y, z, tier)
+        return hex_coords, cartesian_coords
 
-        return coords
-
-    def generate_bs_coordinates(self) -> List[Tuple[float, float, float, int]]:
+    def generate_bs_coordinates(self):
         if self.mode == 1:
-            return self.generate_tri_hex_centers()
+            hex_coords, _ = self.generate_hex_grid()
+            bs_coords, hex_centers = self.generate_tri_hex_centers(hex_coords)
+            self._hex_centers_for_vis = hex_centers
+            return bs_coords
         else:
-            return self.generate_hex_grid()
+            _, cartesian_coords = self.generate_hex_grid()
+            self._hex_centers_for_vis = cartesian_coords
+            return cartesian_coords
 
-    def generate_tri_hex_centers(self) -> List[Tuple[float, float, float, int]]:
-        bs_coords = self.generate_hex_grid()
+    def generate_tri_hex_centers(self, hex_coords: List[Tuple[int, int, int, int]]) -> Tuple[
+        List[Tuple[float, float, float, int]], List[Tuple[float, float, float, int]]]:
+        bs_coords = []
         hex_centers = []
-        hex_angles = [math.pi / 6, 5 * math.pi / 6, 3 * math.pi / 2]
 
-        for bs_x, bs_y, bs_z, tier in bs_coords:
-            for angle in hex_angles:
-                center_x = bs_x + self.cell_radius * math.cos(angle)
-                center_y = bs_y + self.cell_radius * math.sin(angle)
-                hex_centers.append((center_x, center_y, bs_z, tier))
+        P_offset =  2 / 3
+        Q_offset = -1 / 3
+        R_offset = -1 / 3
+        offsets = [(P_offset,Q_offset,R_offset),(R_offset,P_offset,Q_offset),(Q_offset,R_offset,P_offset)]
 
-        return hex_centers
+        P_rot = (1 + math.sqrt(3)) / 3
+        Q_rot =  1 / 3
+        R_rot = (1 - math.sqrt(3)) / 3
+        rot_matrix = [(P_rot, Q_rot, R_rot), (R_rot, P_rot, Q_rot), (Q_rot, R_rot, P_rot)]
+
+        for hx, hy, hz, tier in hex_coords:
+            rx = rot_matrix[0][0] * hx + rot_matrix[0][1] * hy + rot_matrix[0][2] * hz
+            ry = rot_matrix[1][0] * hx + rot_matrix[1][1] * hy + rot_matrix[1][2] * hz
+            rz = rot_matrix[2][0] * hx + rot_matrix[2][1] * hy + rot_matrix[2][2] * hz
+
+            rx,ry,rz = math.sqrt(3)*rx,math.sqrt(3)*ry,math.sqrt(3)*rz
+
+            rx,ry,rz = hex_round(rx,ry,rz)
+
+            bx, by = self.hex_to_cartesian(rx, ry, rz)
+            bs_coords.append((bx, by, self.bs_height, tier))
+
+            for off in offsets:
+                cx, cy, cz = rx + off[0], ry + off[1], rz + off[2]
+                hx_c, hy_c = self.hex_to_cartesian(cx, cy, cz)
+                hex_centers.append((hx_c, hy_c, self.bs_height, tier))
+
+        return bs_coords, hex_centers
 
     def get_bs_positions(self) -> List[Tuple[float, float, float, int]]:
         return self.generate_bs_coordinates()
@@ -90,8 +145,13 @@ class HexagonalNetwork:
         central_bs = self.get_bs_positions()
         all_bs = []
 
+        self._all_hex_centers_wrapped = []
+
         for idx, (x, y, z, tier) in enumerate(central_bs):
             all_bs.append((x, y, z, tier, 0, idx))
+
+        for hx, hy, hz, tier in self._hex_centers_for_vis:
+            self._all_hex_centers_wrapped.append((hx, hy, tier, 0))
 
         wrap_directions = self.HEX_DIRECTIONS
         shift_distance = (2 * self.tiers + 1) * self.ISD
@@ -118,6 +178,9 @@ class HexagonalNetwork:
 
             for orig_idx, (x, y, z, tier) in enumerate(central_bs):
                 all_bs.append((x + final_x, y + final_y, z, tier, wrap_id, orig_idx))
+
+            for hx, hy, hz, tier in self._hex_centers_for_vis:
+                self._all_hex_centers_wrapped.append((hx + final_x, hy + final_y, tier, wrap_id))
 
         return all_bs
 
@@ -160,10 +223,11 @@ class HexagonalNetwork:
 
         return user_coords
 
-    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float,z_bs: float) -> float:
+    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float,
+                           z_bs: float) -> float:
         return math.sqrt((x_bs - x_user) ** 2 + (y_bs - y_user) ** 2 + (z_bs - z_user) ** 2)
 
-    def save_distances_to_csv(self, filename: str = "user_bs_distances.txt",user_coords: List = None):
+    def save_distances_to_csv(self, filename: str = "user_bs_distances.txt", user_coords: List = None):
         if user_coords is None:
             user_coords = self.generate_user_coordinates()
 
@@ -177,11 +241,11 @@ class HexagonalNetwork:
                                 for i in range(num_orig_bs)}
                 for bs in bs_coords:
                     bx, by, bz, _, wrap_id, orig_id = bs
-                    if dist := self.get_bs_user_length(ux, uy, uz, bx, by, bz):
-                        if dist < best_matches[orig_id]['dist']:
-                            best_matches[orig_id]['dist'] = dist
-                            best_matches[orig_id]['coords'] = (bx, by, bz)
-                            best_matches[orig_id]['wrap_id'] = wrap_id
+                    dist = self.get_bs_user_length(ux, uy, uz, bx, by, bz)
+                    if dist < best_matches[orig_id]['dist']:
+                        best_matches[orig_id]['dist'] = dist
+                        best_matches[orig_id]['coords'] = (bx, by, bz)
+                        best_matches[orig_id]['wrap_id'] = wrap_id
                 f.write(f"For user with coords ({ux:.2f}, {uy:.2f}, {uz:.2f}) distance to:\n")
                 for i in range(num_orig_bs):
                     x, y, z = best_matches[i]['coords']
@@ -195,45 +259,45 @@ class HexagonalNetwork:
         print(f"БС (с копиями): {len(bs_coords)}")
 
     def visualize(self, user_coords: List = None):
-        bs_coords = self.generate_wrapped_bs_positions()
+        wrapped_bs = self.generate_wrapped_bs_positions()
+
         if user_coords is None:
             user_coords = self.generate_user_coordinates()
 
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.set_aspect('equal')
 
-        if user_coords:
-            ax.scatter([u[0] for u in user_coords], [u[1] for u in user_coords],c='red', s=30, alpha=0.7, marker='o', zorder=5)
-
-        for x, y, z, tier, wrap_id, orig_id in bs_coords:
+        for x, y, tier, wrap_id in self._all_hex_centers_wrapped:
+            is_wrapped = wrap_id > 0
             hexagon = RegularPolygon(
-                (x, y),
-                numVertices=6,
-                radius=self.cell_radius,
-                orientation=0,
-                edgecolor='black',
-                alpha=0.3 if wrap_id > 0 else 0.5,
-                linewidth=0.8 if wrap_id > 0 else 1.2,
-                linestyle='--' if wrap_id > 0 else '-'
+                (x, y), numVertices=6, radius=self.cell_radius, orientation=0,
+                edgecolor='gray' if is_wrapped else 'black',
+                alpha=0.2 if is_wrapped else 0.5,
+                linewidth=0.8 if is_wrapped else 1.2,
+                linestyle='--' if is_wrapped else '-',
+                zorder=1
             )
             ax.add_patch(hexagon)
 
-        for x, y, z, tier, wrap_id, orig_id in bs_coords:
+        for x, y, z, tier, wrap_id, orig_id in wrapped_bs:
             if wrap_id == 0:
-                ax.plot(x, y, 'ko', markersize=8)
+                ax.plot(x, y, 'ko', markersize=8, zorder=3)
                 text_color = 'black'
             else:
-                ax.plot(x, y, 'go', markersize=6, alpha=0.5)
+                ax.plot(x, y, 'go', markersize=6, alpha=0.5, zorder=3)
                 text_color = 'green'
 
             label = f"Cl {wrap_id}\nBS {orig_id}"
-            ax.text(x, y + self.ISD * 0.15, label, fontsize=8, ha='center', va='bottom',color=text_color)
+            ax.text(x, y + self.ISD * 0.15, label, fontsize=8, ha='center', va='bottom',
+                    color=text_color, alpha=1, zorder=4)
 
+        if user_coords:
+            ax.scatter([u[0] for u in user_coords], [u[1] for u in user_coords],
+                       c='red', s=30, alpha=0.7, marker='o', zorder=5)
 
         ax.grid(True, linestyle='--', alpha=0.5)
         ax.set_xlabel('X (м)', fontsize=12)
         ax.set_ylabel('Y (м)', fontsize=12)
-
         ax.set_title(f'Гексагональная сеть: ISD={self.ISD} м', fontsize=14, fontweight='bold')
         plt.tight_layout()
         plt.show()
@@ -244,6 +308,7 @@ def main():
     user_coords = network.generate_user_coordinates()
     network.save_distances_to_csv("user_bs_distances.csv", user_coords=user_coords)
     network.visualize(user_coords=user_coords)
+
 
 if __name__ == "__main__":
     main()
