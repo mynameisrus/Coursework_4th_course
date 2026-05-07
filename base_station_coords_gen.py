@@ -188,35 +188,48 @@ class HexagonalNetwork:
         if self.total_users <= 0:
             return []
 
-        hex_coords = self.generate_bs_coordinates()
-        if len(hex_coords) == 0:
+        if self.mode == 0:
+            cell_centers = self.generate_bs_coordinates()
+        else:
+            self.generate_bs_coordinates()
+            cell_centers = self._hex_centers_for_vis
+
+        if len(cell_centers) == 0:
             return []
 
         user_coords = []
+
         for _ in range(self.total_users):
-            hex_index = random.randint(0, len(hex_coords) - 1)
-            hex_x, hex_y, hex_z, _ = hex_coords[hex_index]
+
+            cx, cy, cz, _ = random.choice(cell_centers)
+
             sector = random.randint(0, 5)
 
             r1 = random.random()
             r2 = random.random()
+
             if r1 + r2 > 1:
                 r1 = 1 - r1
                 r2 = 1 - r2
 
             angle_offset = math.pi / 6
+
             angle_base = sector * math.pi / 3 + angle_offset
             angle_next = (sector + 1) * math.pi / 3 + angle_offset
 
             x1, y1 = 0, 0
-            x2, y2 = self.cell_radius * math.cos(angle_base), self.cell_radius * math.sin(angle_base)
-            x3, y3 = self.cell_radius * math.cos(angle_next), self.cell_radius * math.sin(angle_next)
 
-            user_rel_x = r1 * x2 + r2 * x3 + (1 - r1 - r2) * x1
-            user_rel_y = r1 * y2 + r2 * y3 + (1 - r1 - r2) * y1
+            x2 = self.cell_radius * math.cos(angle_base)
+            y2 = self.cell_radius * math.sin(angle_base)
 
-            user_x = hex_x + user_rel_x
-            user_y = hex_y + user_rel_y
+            x3 = self.cell_radius * math.cos(angle_next)
+            y3 = self.cell_radius * math.sin(angle_next)
+
+            user_rel_x = r1 * x2 + r2 * x3
+            user_rel_y = r1 * y2 + r2 * y3
+
+            user_x = cx + user_rel_x
+            user_y = cy + user_rel_y
             user_z = random.uniform(0, self.bs_height)
 
             user_coords.append((user_x, user_y, user_z))
