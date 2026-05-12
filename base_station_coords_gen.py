@@ -1,41 +1,11 @@
 import json
 import math
-import csv
 from pathlib import Path
 from typing import List, Tuple
 import matplotlib.pyplot as plt
 from matplotlib.patches import RegularPolygon
 import random
-
-
-def hex_round(x: float, y: float, z: float):
-    l = round(x)
-    m = round(y)
-    n = round(z)
-
-    s = l + m + n
-
-    if s == 0:
-        return l, m, n
-
-    if s > 0:
-        xr = x - l
-        yr = y - m
-        zr = z - n
-    else:
-        xr = l - x
-        yr = m - y
-        zr = n - z
-
-    if xr <= yr and xr <= zr:
-        l = - (m + n)
-    elif yr <= xr and yr <= zr:
-        m = - (l + n)
-    else:
-        n = - (l + m)
-
-    return l, m, n
-
+import numpy as np
 
 class HexagonalNetwork:
     HEX_DIRECTIONS = [
@@ -66,6 +36,34 @@ class HexagonalNetwork:
     def load_config(self) -> dict:
         with open(self.config_path, 'r', encoding='utf-8') as f:
             return json.load(f)
+
+    def hex_round(self, x: float, y: float, z: float):
+        l = round(x)
+        m = round(y)
+        n = round(z)
+
+        s = l + m + n
+
+        if s == 0:
+            return l, m, n
+
+        if s > 0:
+            xr = x - l
+            yr = y - m
+            zr = z - n
+        else:
+            xr = l - x
+            yr = m - y
+            zr = n - z
+
+        if xr <= yr and xr <= zr:
+            l = - (m + n)
+        elif yr <= xr and yr <= zr:
+            m = - (l + n)
+        else:
+            n = - (l + m)
+
+        return l, m, n
 
     def hex_to_cartesian(self, x: float, y: float, z: float) -> Tuple[float, float]:
         step = self.site_radius if self.mode == 1 else self.ISD
@@ -104,35 +102,35 @@ class HexagonalNetwork:
             self._hex_centers_for_vis = cartesian_coords
             return cartesian_coords
 
-    def generate_tri_hex_centers(self, hex_coords: List[Tuple[int, int, int, int]]) -> Tuple[
-        List[Tuple[float, float, float, int]], List[Tuple[float, float, float, int]]]:
+    def generate_tri_hex_centers(self,hex_coords: List[Tuple[int, int, int, int]]) -> Tuple[List[Tuple[float, float, float, int]],List[Tuple[float, float, float, int]]]:
         bs_coords = []
         hex_centers = []
 
-        P_offset =  2 / 3
-        Q_offset = -1 / 3
-        R_offset = -1 / 3
-        offsets = [(P_offset,Q_offset,R_offset),(R_offset,P_offset,Q_offset),(Q_offset,R_offset,P_offset)]
+        offsets = np.array([
+            [2 / 3, -1 / 3, -1 / 3],
+            [-1 / 3, 2 / 3, -1 / 3],
+            [-1 / 3, -1 / 3, 2 / 3]
+        ])
 
-        P_rot = (1 + math.sqrt(3)) / 3
-        Q_rot =  1 / 3
-        R_rot = (1 - math.sqrt(3)) / 3
-        rot_matrix = [(P_rot, Q_rot, R_rot), (R_rot, P_rot, Q_rot), (Q_rot, R_rot, P_rot)]
+        rot_matrix = np.array([
+            [(1 + math.sqrt(3)) / 3, 1 / 3, (1 - math.sqrt(3)) / 3],
+            [(1 - math.sqrt(3)) / 3, (1 + math.sqrt(3)) / 3, 1 / 3],
+            [1 / 3, (1 - math.sqrt(3)) / 3, (1 + math.sqrt(3)) / 3]
+        ])
 
         for hx, hy, hz, tier in hex_coords:
-            rx = rot_matrix[0][0] * hx + rot_matrix[0][1] * hy + rot_matrix[0][2] * hz
-            ry = rot_matrix[1][0] * hx + rot_matrix[1][1] * hy + rot_matrix[1][2] * hz
-            rz = rot_matrix[2][0] * hx + rot_matrix[2][1] * hy + rot_matrix[2][2] * hz
 
-            rx,ry,rz = math.sqrt(3)*rx,math.sqrt(3)*ry,math.sqrt(3)*rz
+            h = np.array([hx, hy, hz])
+            r = np.sqrt(3) * (rot_matrix @ h)
 
-            rx,ry,rz = hex_round(rx,ry,rz)
+            rx, ry, rz = self.hex_round(*r)
 
             bx, by = self.hex_to_cartesian(rx, ry, rz)
             bs_coords.append((bx, by, self.bs_height, tier))
 
-            for off in offsets:
-                cx, cy, cz = rx + off[0], ry + off[1], rz + off[2]
+            shifted = offsets + np.array([rx, ry, rz])
+
+            for cx, cy, cz in shifted:
                 hx_c, hy_c = self.hex_to_cartesian(cx, cy, cz)
                 hex_centers.append((hx_c, hy_c, self.bs_height, tier))
 
@@ -217,8 +215,6 @@ class HexagonalNetwork:
             angle_base = sector * math.pi / 3 + angle_offset
             angle_next = (sector + 1) * math.pi / 3 + angle_offset
 
-            x1, y1 = 0, 0
-
             x2 = self.cell_radius * math.cos(angle_base)
             y2 = self.cell_radius * math.sin(angle_base)
 
@@ -236,11 +232,10 @@ class HexagonalNetwork:
 
         return user_coords
 
-    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float,
-                           z_bs: float) -> float:
+    def get_bs_user_length(self, x_user: float, y_user: float, z_user: float, x_bs: float, y_bs: float,z_bs: float) -> float:
         return math.sqrt((x_bs - x_user) ** 2 + (y_bs - y_user) ** 2 + (z_bs - z_user) ** 2)
 
-    def save_distances_to_csv(self, filename: str = "user_bs_distances.txt", user_coords: List = None):
+    def save_distances_to_txt(self, filename: str = "user_bs_distances.txt", user_coords: List = None):
         if user_coords is None:
             user_coords = self.generate_user_coordinates()
 
@@ -319,7 +314,7 @@ class HexagonalNetwork:
 def main():
     network = HexagonalNetwork("config.json")
     user_coords = network.generate_user_coordinates()
-    network.save_distances_to_csv("user_bs_distances.csv", user_coords=user_coords)
+    network.save_distances_to_txt("user_bs_distances.txt", user_coords=user_coords)
     network.visualize(user_coords=user_coords)
 
 
